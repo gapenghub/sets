@@ -91,6 +91,8 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .ctrls button .c{width:56px;height:56px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
 .ctrls button svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .ctrls button:disabled{opacity:.35}
+#resetBtn{touch-action:none;-webkit-touch-callout:none}
+.tapzone{-webkit-touch-callout:none}
 .ctrls .c .fill{position:absolute;inset:0;background:var(--red);transform:scaleX(0);transform-origin:left;opacity:.35}
 .ctrls .holding .c .fill{transform:scaleX(1);transition:transform 1s linear}
 
@@ -493,7 +495,7 @@ function renderTimer(){
   else{main.textContent='Restart';main.className='rbtn green';}
   $('#tLabel').textContent=T.label?('Rest · '+T.label):'';
   $('#tEnd').style.visibility=T.status==='running'?'visible':'hidden';
-  if(!idle)renderTimerLive();else{renderPresets();renderMini();}
+  if(!idle)renderTimerLive();else{renderPresets();renderMini();setPicker(T.pick);}
 }
 function renderPresets(){
   const p=$('#presets');p.innerHTML='';
