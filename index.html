@@ -364,8 +364,8 @@ function buildAlarm(){
 }
 buildAlarm();
 let audioUnlocked=false,alarmWanted=false,alarmUntil=0;
-// 'transient' = notification-style: plays on top of (ducks) other apps' audio instead of pausing it. WebKit-only API.
-function audioMode(){try{if(navigator.audioSession)navigator.audioSession.type='transient';}catch(e){}}
+// 'ambient' = mixes with other apps' audio (Netflix keeps playing) and obeys the ringer switch. WebKit-only API.
+function audioMode(){try{if(navigator.audioSession)navigator.audioSession.type='ambient';}catch(e){}}
 function unlockAudio(){if(audioUnlocked)return;audioUnlocked=true;audioMode();alarmEl.muted=true;alarmEl.play().then(()=>{alarmEl.pause();alarmEl.currentTime=0;alarmEl.muted=false;}).catch(()=>{alarmEl.muted=false;audioUnlocked=false;});}
 function startAlarm(){
   if(!S.settings.sound||S.settings.bridge)return;
