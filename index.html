@@ -20,9 +20,10 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;
   overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-text-size-adjust:100%}
-body{display:flex;flex-direction:column;height:100dvh;transition:background .3s}
-body.alarm{animation:flash 1s ease-in-out infinite}
-@keyframes flash{0%,100%{background:#000}50%{background:#3a0d0a}}
+body{display:flex;flex-direction:column;height:100dvh}
+#flash{position:fixed;inset:0;background:var(--red);opacity:0;pointer-events:none;z-index:15}
+body.alarm #flash{animation:flash 1s ease-in-out infinite}
+@keyframes flash{0%,100%{opacity:0}50%{opacity:.22}}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;touch-action:manipulation}
 input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:0;border-radius:8px;padding:8px 10px;-webkit-user-select:text;user-select:text}
 input:focus,textarea:focus,select:focus{outline:2px solid var(--orange)}
@@ -39,8 +40,8 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 
 /* tab bar */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;height:calc(var(--tab) + env(safe-area-inset-bottom,0px));
-  padding-bottom:env(safe-area-inset-bottom,0px);display:flex;background:rgba(22,22,24,.92);
-  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:.5px solid var(--sep)}
+  padding-bottom:env(safe-area-inset-bottom,0px);display:flex;background:#161618;
+  border-top:.5px solid var(--sep)}
 .tabbar button{flex:1;color:var(--muted);font-size:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 .tabbar button.on{color:var(--orange)}
 .tabbar svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -82,7 +83,7 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .minitimer{margin:0 16px 10px;background:var(--card);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;width:calc(100% - 32px);text-align:left}
 .minitimer .mt{font-size:28px;font-weight:300;font-variant-numeric:tabular-nums;min-width:80px}
 .minitimer .bar{flex:1;height:4px;background:var(--card2);border-radius:2px;overflow:hidden}
-.minitimer .bar i{display:block;height:100%;background:var(--orange);width:0;transition:width .25s linear}
+.minitimer .bar i{display:block;height:100%;background:var(--orange);transform:scaleX(0);transform-origin:left;transition:transform 1s linear}
 .minitimer.done .mt{color:var(--red)}
 .minitimer.done .bar i{background:var(--red)}
 .minitimer .lbl{color:var(--muted);font-size:13px}
@@ -99,7 +100,10 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 /* timer */
 .picker{position:relative;height:216px;display:flex;justify-content:center;align-items:center;gap:0;margin:24px 0 10px}
 .picker .col{height:216px;width:80px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;
-  -webkit-mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent);mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent)}
+  }
+.picker .fade{position:absolute;left:0;right:0;height:64px;pointer-events:none;z-index:1}
+.picker .fade.t{top:0;background:linear-gradient(var(--bg),rgba(0,0,0,0))}
+.picker .fade.b{bottom:0;background:linear-gradient(rgba(0,0,0,0),var(--bg))}
 .picker .col::-webkit-scrollbar{display:none}
 .picker .col .pad{height:91px}
 .picker .col .it{height:34px;line-height:34px;text-align:right;padding-right:8px;font-size:23px;scroll-snap-align:center;font-variant-numeric:tabular-nums}
@@ -111,7 +115,7 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .ringwrap{position:relative;width:min(84vw,340px);aspect-ratio:1;margin:18px auto 10px}
 .ringwrap svg{width:100%;height:100%;transform:rotate(-90deg)}
 .ringwrap .track{fill:none;stroke:#2a2a2c;stroke-width:8}
-.ringwrap .prog{fill:none;stroke:var(--orange);stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset .25s linear}
+.ringwrap .prog{fill:none;stroke:var(--orange);stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset 1s linear}
 .ringwrap.done .prog{stroke:var(--red)}
 .ringwrap.paused .prog{opacity:.5}
 .ringtext{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
@@ -167,6 +171,7 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
 </style>
 </head>
 <body>
+<div id="flash"></div>
 <main>
   <!-- TODAY -->
   <section id="screen-today" class="screen">
@@ -211,7 +216,7 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
       <div class="picker">
         <div class="col" id="pmin"></div><span class="unit">min</span>
         <div class="col" id="psec"></div><span class="unit">sec</span>
-        <div class="band"></div>
+        <div class="band"></div><div class="fade t"></div><div class="fade b"></div>
       </div>
       <div class="presets" id="presets"></div>
     </div>
@@ -396,8 +401,8 @@ function tCancel(){stopAlarmSound();document.body.classList.remove('alarm');T.st
 function tFinish(){T.status='done';syncTimerSide();startAlarm();document.body.classList.add('alarm');save();renderTimer();}
 function syncTimerSide(){wake(T.status==='running');}
 function tRemaining(){return T.status==='running'?Math.max(0,T.endAt-Date.now()):T.status==='paused'?T.remaining:0;}
-setInterval(()=>{if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive();}
-  if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();},200);
+setInterval(()=>{if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
+  if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();},250);
 
 /* ---------- shortcuts bridge ---------- */
 function bridge(name,input){
@@ -477,22 +482,32 @@ function renderSets(){
   $('#sNum').textContent=c;$('#sOf').textContent=ex?`of ${ex.sets}`:'sets';
   $('#sTip').textContent=S.settings.tapStartsTimer?'Tap anywhere: +1 set, start rest':'Tap anywhere to count a set';
   $('#undoBtn').disabled=!S.session.history.length;$('#resetBtn').disabled=!c;$('#nextBtn').disabled=dayExs().length<2;
-  renderMini();
+  renderMini(true);
 }
-function renderMini(){
+// Progress fraction the display should be *heading to* one second from now, so a 1s linear
+// CSS transition lands exactly as the next second ticks over (no per-frame JS work).
+function leadFrac(rem){const lead=T.status==='running'?Math.max(0,rem-1000):rem;return 1-lead/(T.duration*1000);}
+function renderMini(snap){
   const m=$('#mini');const st=T.status;m.classList.toggle('hidden',st==='idle');if(st==='idle')return;
   m.classList.toggle('done',st==='done');
   const rem=tRemaining();$('#miniT').textContent=st==='done'?'0:00':fmt(Math.ceil(rem/1000));
   $('#miniL').textContent=st==='done'?'Rest over — tap for next set':st==='paused'?'Paused':(T.label?'Resting · '+T.label:'Resting');
-  $('#miniBar').style.width=st==='done'?'100%':(100*(1-rem/(T.duration*1000)))+'%';
+  setTransform($('#miniBar'),'scaleX('+(st==='done'?1:leadFrac(rem))+')',snap);
 }
+function setTransform(el,val,snap){if(snap){el.style.transition='none';el.style.transform=val;void el.offsetWidth;el.style.transition='';}else el.style.transform=val;}
 const CIRC=2*Math.PI*140;
-function renderTimerLive(){
+let lastSec=-1;
+// Called 4x/s but only touches the DOM when the displayed second changes, and only for the visible tab.
+function renderTimerLive(snap){
+  if(document.hidden)return;
   const rem=tRemaining();const secs=Math.ceil(rem/1000);
-  const d=$('#tDigits');d.textContent=fmt(secs);d.classList.toggle('h',secs>=3600);
-  $('#prog').style.strokeDashoffset=CIRC*(1-rem/(T.duration*1000));
-  if(T.status==='running')$('#tEndT').textContent=fmtClock(T.endAt);
-  renderMini();
+  if(!snap&&secs===lastSec)return;lastSec=secs;
+  if(S.ui.tab==='timer'){
+    const d=$('#tDigits');d.textContent=fmt(secs);d.classList.toggle('h',secs>=3600);
+    const p=$('#prog'),off=CIRC*(T.status==='done'?1:leadFrac(rem));
+    if(snap){p.style.transition='none';p.style.strokeDashoffset=off;void p.getBoundingClientRect();p.style.transition='';}else p.style.strokeDashoffset=off;
+  }
+  if(S.ui.tab==='sets')renderMini(snap);
 }
 function renderTimer(){
   const idle=T.status==='idle';
@@ -506,7 +521,8 @@ function renderTimer(){
   else{main.textContent='Restart';main.className='rbtn green';}
   $('#tLabel').textContent=T.label?('Rest · '+T.label):'';
   $('#tEnd').style.visibility=T.status==='running'?'visible':'hidden';
-  if(!idle)renderTimerLive();else{renderPresets();renderMini();setPicker(T.pick);}
+  if(T.status==='running')$('#tEndT').textContent=fmtClock(T.endAt);
+  if(!idle)renderTimerLive(true);else{renderPresets();renderMini(true);setPicker(T.pick);}
 }
 function renderPresets(){
   const p=$('#presets');p.innerHTML='';
@@ -544,7 +560,7 @@ $('#mini').onclick=()=>{if(T.status==='done'){tCancel();renderSets();}else showT
 /* tabs */
 function showTab(name){S.ui.tab=name;document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id==='screen-'+name));
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
-  if(name==='timer'&&T.status==='idle')setPicker(T.pick);save();}
+  if(name==='timer'&&T.status==='idle')setPicker(T.pick);if(T.status!=='idle')renderTimerLive(true);save();}
 document.querySelectorAll('.tabbar button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $('#a2hsDismiss').onclick=()=>{S.ui.a2hsDismissed=true;save();renderToday();};
 
