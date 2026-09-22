@@ -22,8 +22,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
   overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-text-size-adjust:100%}
 body{display:flex;flex-direction:column;height:100dvh}
 #flash{position:fixed;inset:0;background:var(--red);opacity:0;pointer-events:none;z-index:15}
-body.alarm #flash{animation:flash 1s ease-in-out infinite}
-@keyframes flash{0%,100%{opacity:0}50%{opacity:.22}}
+body.alarm #flash{animation:flash 1s step-end infinite}
+@keyframes flash{0%{opacity:0}50%{opacity:.22}100%{opacity:0}}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;touch-action:manipulation}
 input,select,textarea{font:inherit;color:var(--text);background:var(--card2);border:0;border-radius:8px;padding:8px 10px;-webkit-user-select:text;user-select:text}
 input:focus,textarea:focus,select:focus{outline:2px solid var(--orange)}
@@ -83,7 +83,7 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .minitimer{margin:0 16px 10px;background:var(--card);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;width:calc(100% - 32px);text-align:left}
 .minitimer .mt{font-size:28px;font-weight:300;font-variant-numeric:tabular-nums;min-width:80px}
 .minitimer .bar{flex:1;height:4px;background:var(--card2);border-radius:2px;overflow:hidden}
-.minitimer .bar i{display:block;height:100%;background:var(--orange);transform:scaleX(0);transform-origin:left;transition:transform 1s linear}
+.minitimer .bar i{display:block;height:100%;background:var(--orange);transform:scaleX(0);transform-origin:left}
 .minitimer.done .mt{color:var(--red)}
 .minitimer.done .bar i{background:var(--red)}
 .minitimer .lbl{color:var(--muted);font-size:13px}
@@ -115,7 +115,7 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .ringwrap{position:relative;width:min(84vw,340px);aspect-ratio:1;margin:18px auto 10px}
 .ringwrap svg{width:100%;height:100%;transform:rotate(-90deg)}
 .ringwrap .track{fill:none;stroke:#2a2a2c;stroke-width:8}
-.ringwrap .prog{fill:none;stroke:var(--orange);stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset 1s linear}
+.ringwrap .prog{fill:none;stroke:var(--orange);stroke-width:8;stroke-linecap:round}
 .ringwrap.done .prog{stroke:var(--red)}
 .ringwrap.paused .prog{opacity:.5}
 .ringtext{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
@@ -486,7 +486,9 @@ function renderSets(){
 }
 // Progress fraction the display should be *heading to* one second from now, so a 1s linear
 // CSS transition lands exactly as the next second ticks over (no per-frame JS work).
-function leadFrac(rem){const lead=T.status==='running'?Math.max(0,rem-1000):rem;return 1-lead/(T.duration*1000);}
+// Ring/bar step once per second with no transition: between ticks the page is fully static, which keeps
+// iOS from re-blurring it continuously behind Notification/Control Center.
+function leadFrac(rem){return 1-rem/(T.duration*1000);}
 function renderMini(snap){
   const m=$('#mini');const st=T.status;m.classList.toggle('hidden',st==='idle');if(st==='idle')return;
   m.classList.toggle('done',st==='done');
