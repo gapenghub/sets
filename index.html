@@ -369,7 +369,9 @@ function audioMode(){try{if(navigator.audioSession)navigator.audioSession.type='
 function unlockAudio(){if(audioUnlocked)return;audioUnlocked=true;audioMode();alarmEl.muted=true;alarmEl.play().then(()=>{alarmEl.pause();alarmEl.currentTime=0;alarmEl.muted=false;}).catch(()=>{alarmEl.muted=false;audioUnlocked=false;});}
 function startAlarm(){
   if(!S.settings.sound||S.settings.bridge)return;
-  alarmWanted=true;alarmUntil=Date.now()+30000;
+  // Beep for up to 30s after the timer actually ended; a catch-up beep minutes later is just noise.
+  alarmWanted=true;alarmUntil=T.endAt+30000;
+  if(Date.now()>=alarmUntil){alarmWanted=false;return;}
   // A backgrounded page can't really start audio (iOS opens a silent phantom session). Defer until we're visible again.
   if(document.visibilityState==='visible')playAlarmNow();
 }
