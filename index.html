@@ -404,11 +404,13 @@ const alarmEl=makeWav(3*0.22+0.1,t=>{
 },true);
 // Hold target reached: a soft two-note glass chime (B5 → E6), struck rather than buzzed —
 // each note is a fundamental plus two quickly-fading partials under an exponential decay.
-const CHIME=[{f:987.77,at:0},{f:1318.51,at:0.16}];
-const cueEl=makeWav(1.3,t=>{
+// The figure repeats three times over ~3s so it is still going if you don't catch the first one.
+const CHIME=[];
+for(let r=0;r<3;r++)CHIME.push({f:987.77,at:r},{f:1318.51,at:r+0.16});
+const cueEl=makeWav(3.3,t=>{
   let a=0;
   for(const n of CHIME){const d=t-n.at;if(d<0)continue;
-    const env=Math.exp(-d/0.28)*Math.min(1,d/0.005);   // 5ms attack keeps it from clicking
+    const env=Math.exp(-d/0.38)*Math.min(1,d/0.005);   // 5ms attack keeps it from clicking
     a+=env*(Math.sin(2*Math.PI*n.f*d)
            +0.30*Math.sin(4*Math.PI*n.f*d)*Math.exp(-d/0.12)
            +0.12*Math.sin(6*Math.PI*n.f*d)*Math.exp(-d/0.07));}
@@ -422,6 +424,7 @@ function unlockAudio(){
   [alarmEl,cueEl].forEach(el=>{el.muted=true;el.play().then(()=>{el.pause();el.currentTime=0;el.muted=false;}).catch(()=>{el.muted=false;audioUnlocked=false;});});
 }
 function playCue(force){if(!S.settings.sound&&!force)return;audioMode();cueEl.currentTime=0;cueEl.play().catch(()=>{});}
+function stopCue(){cueEl.pause();cueEl.currentTime=0;}
 function startAlarm(){
   if(!S.settings.sound||S.settings.bridge)return;
   // Beep for up to 30s after the timer actually ended; a catch-up beep minutes later is just noise.
@@ -478,7 +481,7 @@ function bridge(name,input){
 let lastTap=0;
 function tap(){
   const now=Date.now();if(now-lastTap<450)return;lastTap=now;
-  unlockAudio();stopAlarmSound();document.body.classList.remove('alarm');
+  unlockAudio();stopAlarmSound();stopCue();document.body.classList.remove('alarm');
   const ex=activeEx();const id=ex?ex.id:'_free';
   const h=S.session.hold;
   if(h&&h.id!==id)S.session.hold=null;              // switched exercise mid-hold: drop the stale one
