@@ -341,7 +341,9 @@ function load(){
   return defaultState();
 }
 let saveT=null;
-function save(){clearTimeout(saveT);saveT=setTimeout(()=>{try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}},80);}
+function flush(){clearTimeout(saveT);saveT=null;try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+// Coalesce a burst into one write instead of restarting the timer on each call; flushed on hide.
+function save(){if(saveT)return;saveT=setTimeout(flush,400);}
 
 /* ---------- session helpers ---------- */
 // Exercises written before the hold feature get classified once, from their own text.
@@ -410,9 +412,10 @@ function startAlarm(){
   if(Date.now()>=alarmUntil){alarmWanted=false;return;}
   // A backgrounded page can't really start audio (iOS opens a silent phantom session). Defer until we're visible again.
   if(document.visibilityState==='visible')playAlarmNow();
+  syncTick();
 }
 function playAlarmNow(){audioMode();alarmEl.pause();alarmEl.currentTime=0;alarmEl.play().catch(()=>{});}
-function stopAlarmSound(){alarmWanted=false;alarmEl.pause();alarmEl.currentTime=0;}
+function stopAlarmSound(){alarmWanted=false;alarmEl.pause();alarmEl.currentTime=0;syncTick();}
 
 /* ---------- wake lock ---------- */
 let wl=null;
@@ -430,11 +433,21 @@ function tPause(){if(T.status!=='running')return;T.remaining=T.endAt-Date.now();
 function tResume(){if(T.status!=='paused')return;T.endAt=Date.now()+T.remaining;T.status='running';syncTimerSide();save();renderTimer();}
 function tCancel(){stopAlarmSound();document.body.classList.remove('alarm');T.status='idle';syncTimerSide();save();renderTimer();}
 function tFinish(){T.status='done';syncTimerSide();startAlarm();document.body.classList.add('alarm');save();renderTimer();}
-function syncTimerSide(){wake(T.status==='running'||!!S.session.hold);}
+function syncTimerSide(){wake(T.status==='running'||!!S.session.hold);syncTick();}
 function tRemaining(){return T.status==='running'?Math.max(0,T.endAt-Date.now()):T.status==='paused'?T.remaining:0;}
-setInterval(()=>{if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
+// The ticker only exists while something is actually counting — idle costs nothing.
+let tickId=null;
+function tick(){
+  if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
   if(S.session.hold)renderHoldLive();
-  if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();},250);
+  if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();
+  syncTick();
+}
+function syncTick(){
+  const need=!document.hidden&&(T.status==='running'||!!(S.session&&S.session.hold)||alarmWanted);
+  if(need&&tickId===null)tickId=setInterval(tick,250);
+  else if(!need&&tickId!==null){clearInterval(tickId);tickId=null;}
+}
 
 /* ---------- shortcuts bridge ---------- */
 function bridge(name,input){
@@ -508,8 +521,11 @@ function hideBanner(){$('#banner').classList.remove('show');}
 $('#bannerUndo').onclick=()=>{undo();};
 
 /* ---------- rendering ---------- */
+// Each renderer bails out when its own tab is off-screen; showTab re-renders whatever it reveals.
+// So a tap during a workout rebuilds only the Sets tab, not all three.
 function renderAll(){ensureSession();renderToday();renderSets();renderTimer();}
 function renderToday(){
+  if(S.ui.tab!=='today')return;
   const d=S.session.day,day=S.routine[d]||{name:'',exercises:[]};
   $('#dayTitle').textContent=DAYS[d];
   $('#daySub').textContent=day.name||(day.exercises.length?'':'Rest day');
@@ -540,6 +556,7 @@ function renderHoldLive(){
   if(target&&s>=target&&!S.session.hold.cued){S.session.hold.cued=true;playCue();}
 }
 function renderSets(){
+  if(S.ui.tab!=='sets')return;
   const ex=activeEx();const id=ex?ex.id:'_free';const c=count(id);const holding=!!S.session.hold;
   $('#sName').textContent=ex?ex.name:'Free count';
   $('#sMeta').textContent=ex?`${ex.sets} sets × ${ex.reps||'—'} · ${fmt(restFor(ex))} rest`:`No routine selected · ${fmt(S.settings.defaultRest)} rest`;
@@ -587,6 +604,8 @@ function renderTimerLive(snap){
 }
 function renderTimer(){
   const idle=T.status==='idle';
+  // Off the Timer tab there is still the rest bar on the Sets tab to keep current.
+  if(S.ui.tab!=='timer'){if(!idle)renderTimerLive(true);else renderMini(true);return;}
   $('#tIdle').classList.toggle('hidden',!idle);$('#tRun').classList.toggle('hidden',idle);
   const main=$('#tMain'),cancel=$('#tCancel');cancel.disabled=idle;
   $('#ring').classList.toggle('done',T.status==='done');$('#ring').classList.toggle('paused',T.status==='paused');
@@ -636,7 +655,10 @@ $('#mini').onclick=()=>{if(T.status==='done'){tCancel();renderSets();}else showT
 /* tabs */
 function showTab(name){S.ui.tab=name;document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id==='screen-'+name));
   document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
-  if(name==='timer'&&T.status==='idle')setPicker(T.pick);if(T.status!=='idle')renderTimerLive(true);save();}
+  lastSec=lastHoldSec=-1;                       // force a fresh paint of whatever we just revealed
+  if(name==='today')renderToday();else if(name==='sets')renderSets();else renderTimer();
+  if(name==='timer'&&T.status==='idle')setPicker(T.pick);
+  save();}
 document.querySelectorAll('.tabbar button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 $('#a2hsDismiss').onclick=()=>{S.ui.a2hsDismissed=true;save();renderToday();};
 
@@ -644,7 +666,9 @@ $('#a2hsDismiss').onclick=()=>{S.ui.a2hsDismissed=true;save();renderToday();};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){ensureSession();
   if(T.status==='running'&&T.endAt<=Date.now())tFinish();
   else if(alarmWanted&&Date.now()<alarmUntil)playAlarmNow(); // alarm went off while we were in the background
-  syncTimerSide();renderAll();}});
+  syncTimerSide();renderAll();}
+  else{flush();syncTick();}});   // going away: persist now, and let the ticker stop
+window.addEventListener('pagehide',flush);
 
 /* ---------- edit sheet ---------- */
 let ED=null;
@@ -707,7 +731,7 @@ migrateHolds();
 ensureSession();
 if(T.status==='running'&&T.endAt<=Date.now())T.status='done';
 if(T.status==='done'){document.body.classList.add('alarm');}
-renderAll();showTab(S.ui.tab||'sets');
+renderAll();showTab(S.ui.tab||'sets');syncTimerSide();  // starts the ticker if we reopened mid-rest
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body>
