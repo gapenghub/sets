@@ -78,7 +78,10 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .tapzone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;min-height:220px;position:relative}
 .tapzone .num{font-size:min(44vw,190px);font-weight:200;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-4px;transition:transform .12s}
 .tapzone.bump .num{transform:scale(1.08)}
+.tapzone .num.t{font-size:min(34vw,150px);letter-spacing:-2px}
+.tapzone .num.past{color:var(--green)}
 .tapzone .of{color:var(--muted);font-size:20px;margin-top:6px}
+.tapzone .holdinfo{color:var(--muted);font-size:15px;margin-top:6px;min-height:18px}
 .tapzone .tip{position:absolute;bottom:12px;color:var(--muted);font-size:13px;opacity:.7}
 .minitimer{margin:0 16px 10px;background:var(--card);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;width:calc(100% - 32px);text-align:left}
 .minitimer .mt{font-size:28px;font-weight:300;font-variant-numeric:tabular-nums;min-width:80px}
@@ -156,6 +159,11 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .exed .r1{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .exed .r1 input{flex:1;min-width:0}
 .exed .r2{display:flex;gap:8px}
+.exed .r3{display:flex;gap:8px;align-items:center;margin-top:8px}
+.exed .r3 input{flex:1;min-width:0;font-size:13px}
+.exed .r3 input:disabled{opacity:.4}
+.pill{padding:8px 12px;border-radius:18px;background:var(--card2);color:var(--muted);font-size:13px;white-space:nowrap;flex:none}
+.pill.on{background:rgba(255,159,10,.22);color:var(--orange)}
 .exed .r2 label{flex:1;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;min-width:0}
 .exed .r2 input{width:100%}
 .exed .mv{width:34px;height:34px;border-radius:8px;background:var(--card2);color:var(--orange);font-size:16px;flex:none}
@@ -197,6 +205,7 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
     <label class="tapzone" for="hap" id="tapzone">
       <div class="num" id="sNum">0</div>
       <div class="of" id="sOf">of 4</div>
+      <div class="holdinfo" id="sHold"></div>
       <div class="tip" id="sTip">Tap anywhere to count a set</div>
     </label>
     <button class="minitimer hidden" id="mini">
@@ -314,7 +323,7 @@ function seedRoutine(){
     6:{name:'Optional run',note:'45 min light run, conversational pace. One day (Sat or Sun), not both.',exercises:[]},
   };
 }
-function newSession(day){return {date:todayKey(),day,counts:{},activeId:null,history:[],last:Date.now()};}
+function newSession(day){return {date:todayKey(),day,counts:{},activeId:null,history:[],holds:{},hold:null,last:Date.now()};}
 function defaultState(){
   return {
     settings:{defaultRest:180,tapStartsTimer:true,sound:true,bridge:false,bridgeStart:'Rest',bridgeCancel:'Rest Cancel',presets:[60,90,120,180]},
@@ -335,9 +344,27 @@ let saveT=null;
 function save(){clearTimeout(saveT);saveT=setTimeout(()=>{try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}},80);}
 
 /* ---------- session helpers ---------- */
+// Exercises written before the hold feature get classified once, from their own text.
+// "30–45s ea" / "8–15s hold" -> timed hold with that target; "max" on a hold/plank -> count up;
+// "6–8 · 3s down" is tempo, not a hold, so the seconds pattern only counts at the start of the reps.
+function migrateHolds(){
+  let changed=false;
+  Object.keys(S.routine).forEach(k=>{
+    const d=S.routine[k];if(!d||!Array.isArray(d.exercises))return;
+    d.exercises.forEach(e=>{
+      if(e.hold!==undefined)return;changed=true;
+      const text=((e.name||'')+' '+(e.reps||'')).toLowerCase();
+      const secs=/^(\d+)\s*(?:[–-]\s*\d+\s*)?s\b/.exec((e.reps||'').trim());
+      const isHold=/\bhold\b|plank|l-?sit|dead\s*hang/.test(text)||!!secs;
+      e.hold=isHold;e.holdSec=isHold&&secs?parseInt(secs[1]):null;
+    });
+  });
+  if(changed)save();
+}
 function ensureSession(){
   const s=S.session;
   if(s.date!==todayKey() && Date.now()-(s.last||0)>4*3600e3){S.session=newSession(new Date().getDay());}
+  if(!s.holds)s.holds={};if(s.hold===undefined)s.hold=null;
   const day=S.routine[S.session.day];
   const exs=day?day.exercises:[];
   if(!exs.find(e=>e.id===S.session.activeId)){const n=exs.find(e=>count(e.id)<e.sets)||exs[0];S.session.activeId=n?n.id:null;}
@@ -356,22 +383,26 @@ function fmt(sec){sec=Math.max(0,Math.round(sec));const h=Math.floor(sec/3600),m
 function fmtClock(ts){return new Date(ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});}
 
 /* ---------- audio ---------- */
-let alarmEl=null;
-function buildAlarm(){
-  const sr=22050,len=Math.round(sr*1.6),buf=new Uint8Array(44+len*2);const dv=new DataView(buf.buffer);
+// beeps: how many 0.16s tones, 0.22s apart. Built as a data-URI wav so there is nothing to download.
+function makeSound(beeps,loop){
+  const sr=22050,dur=beeps*0.22+0.1,len=Math.round(sr*dur),buf=new Uint8Array(44+len*2);const dv=new DataView(buf.buffer);
   const w=(o,s)=>{for(let i=0;i<s.length;i++)buf[o+i]=s.charCodeAt(i);};
   w(0,'RIFF');dv.setUint32(4,36+len*2,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
   dv.setUint32(24,sr,true);dv.setUint32(28,sr*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,len*2,true);
   for(let i=0;i<len;i++){const t=i/sr;let a=0;
-    for(let b=0;b<3;b++){const st=b*0.22;if(t>=st&&t<st+0.16){const e=Math.min(1,(t-st)/0.01,(st+0.16-t)/0.03);a=Math.sin(2*Math.PI*1000*t)*e*0.6+Math.sin(2*Math.PI*1500*t)*e*0.25;}}
+    for(let b=0;b<beeps;b++){const st=b*0.22;if(t>=st&&t<st+0.16){const e=Math.min(1,(t-st)/0.01,(st+0.16-t)/0.03);a=Math.sin(2*Math.PI*1000*t)*e*0.6+Math.sin(2*Math.PI*1500*t)*e*0.25;}}
     dv.setInt16(44+i*2,a*32767,true);}
-  alarmEl=new Audio(URL.createObjectURL(new Blob([buf],{type:'audio/wav'})));alarmEl.loop=true;alarmEl.preload='auto';
+  const el=new Audio(URL.createObjectURL(new Blob([buf],{type:'audio/wav'})));el.loop=!!loop;el.preload='auto';return el;
 }
-buildAlarm();
+const alarmEl=makeSound(3,true),cueEl=makeSound(1,false);
 let audioUnlocked=false,alarmWanted=false,alarmUntil=0;
 // 'ambient' = mixes with other apps' audio (Netflix keeps playing) and obeys the ringer switch. WebKit-only API.
 function audioMode(){try{if(navigator.audioSession)navigator.audioSession.type='ambient';}catch(e){}}
-function unlockAudio(){if(audioUnlocked)return;audioUnlocked=true;audioMode();alarmEl.muted=true;alarmEl.play().then(()=>{alarmEl.pause();alarmEl.currentTime=0;alarmEl.muted=false;}).catch(()=>{alarmEl.muted=false;audioUnlocked=false;});}
+function unlockAudio(){
+  if(audioUnlocked)return;audioUnlocked=true;audioMode();
+  [alarmEl,cueEl].forEach(el=>{el.muted=true;el.play().then(()=>{el.pause();el.currentTime=0;el.muted=false;}).catch(()=>{el.muted=false;audioUnlocked=false;});});
+}
+function playCue(){if(!S.settings.sound)return;audioMode();cueEl.currentTime=0;cueEl.play().catch(()=>{});}
 function startAlarm(){
   if(!S.settings.sound||S.settings.bridge)return;
   // Beep for up to 30s after the timer actually ended; a catch-up beep minutes later is just noise.
@@ -399,9 +430,10 @@ function tPause(){if(T.status!=='running')return;T.remaining=T.endAt-Date.now();
 function tResume(){if(T.status!=='paused')return;T.endAt=Date.now()+T.remaining;T.status='running';syncTimerSide();save();renderTimer();}
 function tCancel(){stopAlarmSound();document.body.classList.remove('alarm');T.status='idle';syncTimerSide();save();renderTimer();}
 function tFinish(){T.status='done';syncTimerSide();startAlarm();document.body.classList.add('alarm');save();renderTimer();}
-function syncTimerSide(){wake(T.status==='running');}
+function syncTimerSide(){wake(T.status==='running'||!!S.session.hold);}
 function tRemaining(){return T.status==='running'?Math.max(0,T.endAt-Date.now()):T.status==='paused'?T.remaining:0;}
 setInterval(()=>{if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
+  if(S.session.hold)renderHoldLive();
   if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();},250);
 
 /* ---------- shortcuts bridge ---------- */
@@ -418,7 +450,26 @@ function tap(){
   const now=Date.now();if(now-lastTap<450)return;lastTap=now;
   unlockAudio();stopAlarmSound();document.body.classList.remove('alarm');
   const ex=activeEx();const id=ex?ex.id:'_free';
-  const entry={type:'tap',id,prevActive:S.session.activeId,prevTimer:tSnapshot(),bridged:false,at:now};
+  const h=S.session.hold;
+  if(h&&h.id!==id)S.session.hold=null;              // switched exercise mid-hold: drop the stale one
+  if(ex&&ex.hold){                                   // hold exercise: tap starts the hold, tap again ends it
+    if(S.session.hold)return finishHold();
+    return startHold(id);
+  }
+  countSet(ex,id,now,null);
+}
+function startHold(id){
+  S.session.hold={id,start:Date.now(),cued:false};lastHoldSec=-1;syncTimerSide();save();renderSets();
+}
+function cancelHold(){if(!S.session.hold)return;S.session.hold=null;syncTimerSide();save();renderSets();}
+function finishHold(){
+  const h=S.session.hold;const secs=Math.round((Date.now()-h.start)/1000);
+  S.session.hold=null;
+  (S.session.holds[h.id]=S.session.holds[h.id]||[]).push(secs);
+  countSet(activeEx(),h.id,Date.now(),secs);
+}
+function countSet(ex,id,now,heldSecs){
+  const entry={type:'tap',id,prevActive:S.session.activeId,prevTimer:tSnapshot(),bridged:false,at:now,held:heldSecs};
   S.session.counts[id]=count(id)+1;S.session.last=now;
   if(S.settings.tapStartsTimer){tStart(restFor(ex),ex?ex.name:'');if(S.settings.bridge){entry.bridged=true;}}
   else if(T.status==='done'){T.status='idle';renderTimer();}
@@ -433,17 +484,20 @@ function tap(){
   if(entry.bridged)setTimeout(()=>bridge(S.settings.bridgeStart,restFor(ex)),60);
 }
 function undo(){
+  if(S.session.hold)return cancelHold();  // a hold in progress: first Undo just throws it away
   const e=S.session.history.pop();if(!e)return;
   hideBanner();
   if(e.type==='tap'){
     S.session.counts[e.id]=Math.max(0,count(e.id)-1);S.session.activeId=e.prevActive;
+    if(e.held!=null&&S.session.holds[e.id])S.session.holds[e.id].pop();
     if(Date.now()-e.at<30000){tRestore(e.prevTimer);stopAlarmSound();document.body.classList.remove('alarm');if(e.bridged)setTimeout(()=>bridge(S.settings.bridgeCancel,null),60);}
-  }else if(e.type==='reset'){S.session.counts[e.id]=e.prev;}
+  }else if(e.type==='reset'){S.session.counts[e.id]=e.prev;if(e.prevHolds&&e.prevHolds.length)S.session.holds[e.id]=e.prevHolds;}
   else if(e.type==='next'){S.session.activeId=e.prevActive;}
   S.session.last=Date.now();save();renderAll();
 }
 function resetCount(){const ex=activeEx();const id=ex?ex.id:'_free';if(!count(id))return;
-  S.session.history.push({type:'reset',id,prev:count(id)});S.session.counts[id]=0;save();renderAll();}
+  S.session.history.push({type:'reset',id,prev:count(id),prevHolds:(S.session.holds[id]||[]).slice()});
+  S.session.counts[id]=0;delete S.session.holds[id];save();renderAll();}
 function nextExercise(){const exs=dayExs();if(!exs.length)return;const ex=activeEx();const i=ex?exs.indexOf(ex):-1;const nx=exs[(i+1)%exs.length];
   S.session.history.push({type:'next',prevActive:S.session.activeId});S.session.activeId=nx.id;save();renderAll();}
 
@@ -474,18 +528,38 @@ function renderToday(){
   $('#a2hs').classList.toggle('hidden',standalone||S.ui.a2hsDismissed||!/iPhone|iPad/.test(navigator.userAgent));
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const holdSecs=()=>S.session.hold?Math.floor((Date.now()-S.session.hold.start)/1000):0;
+let lastHoldSec=-1;
+// Same contract as renderTimerLive: called 4x/s, touches the DOM only when the second changes.
+function renderHoldLive(){
+  if(document.hidden||S.ui.tab!=='sets')return;
+  const ex=activeEx(),s=holdSecs();if(s===lastHoldSec)return;lastHoldSec=s;
+  const target=ex&&ex.holdSec;
+  $('#sNum').textContent=fmt(s);
+  $('#sNum').classList.toggle('past',!!target&&s>=target);
+  if(target&&s>=target&&!S.session.hold.cued){S.session.hold.cued=true;playCue();}
+}
 function renderSets(){
-  const ex=activeEx();const id=ex?ex.id:'_free';const c=count(id);
+  const ex=activeEx();const id=ex?ex.id:'_free';const c=count(id);const holding=!!S.session.hold;
   $('#sName').textContent=ex?ex.name:'Free count';
   $('#sMeta').textContent=ex?`${ex.sets} sets × ${ex.reps||'—'} · ${fmt(restFor(ex))} rest`:`No routine selected · ${fmt(S.settings.defaultRest)} rest`;
   const dots=$('#sDots');dots.innerHTML='';if(ex)for(let i=0;i<ex.sets;i++){const d=document.createElement('i');if(i<c)d.classList.add('f');dots.appendChild(d);}
-  $('#sNum').textContent=c;$('#sOf').textContent=ex?`of ${ex.sets}`:'sets';
-  $('#sTip').textContent=S.settings.tapStartsTimer?'Tap anywhere: +1 set, start rest':'Tap anywhere to count a set';
-  $('#undoBtn').disabled=!S.session.history.length;$('#resetBtn').disabled=!c;$('#nextBtn').disabled=dayExs().length<2;
+  const num=$('#sNum');num.classList.toggle('t',holding);
+  if(holding){
+    const s=holdSecs();lastHoldSec=s;
+    num.textContent=fmt(s);num.classList.toggle('past',!!ex.holdSec&&s>=ex.holdSec);
+    $('#sOf').textContent=ex.holdSec?`hold ${fmt(ex.holdSec)}`:'holding';
+    $('#sTip').textContent='Tap to end the hold and count the set';
+  }else{
+    num.textContent=c;num.classList.remove('past');
+    $('#sOf').textContent=ex?`of ${ex.sets}`:'sets';
+    $('#sTip').textContent=ex&&ex.hold?'Tap to start the hold':(S.settings.tapStartsTimer?'Tap anywhere: +1 set, start rest':'Tap anywhere to count a set');
+  }
+  const hs=(S.session.holds||{})[id]||[];
+  $('#sHold').textContent=hs.length&&!holding?`last ${fmt(hs[hs.length-1])} · best ${fmt(Math.max(...hs))}`:'';
+  $('#undoBtn').disabled=!holding&&!S.session.history.length;$('#resetBtn').disabled=!c;$('#nextBtn').disabled=dayExs().length<2;
   renderMini(true);
 }
-// Progress fraction the display should be *heading to* one second from now, so a 1s linear
-// CSS transition lands exactly as the next second ticks over (no per-frame JS work).
 // Ring/bar step once per second with no transition: between ticks the page is fully static, which keeps
 // iOS from re-blurring it continuously behind Notification/Control Center.
 function leadFrac(rem){return 1-rem/(T.duration*1000);}
@@ -589,7 +663,10 @@ function renderEdList(){
   const l=$('#edList');l.innerHTML='';
   ED.exercises.forEach((e,i)=>{const w=document.createElement('div');w.className='exed';w.dataset.i=i;
     w.innerHTML=`<div class="r1"><input type="text" class="n" placeholder="Exercise" value="${esc(e.name)}"><button class="mv up">↑</button><button class="mv dn">↓</button><button class="mv del">✕</button></div>
-      <div class="r2"><label>Sets<input type="number" class="s" inputmode="numeric" value="${e.sets}"></label><label>Reps<input type="text" class="r" value="${esc(e.reps||'')}"></label><label>Rest (s)<input type="number" class="t" inputmode="numeric" value="${e.rest||''}" placeholder="${S.settings.defaultRest}"></label></div>`;
+      <div class="r2"><label>Sets<input type="number" class="s" inputmode="numeric" value="${e.sets}"></label><label>Reps<input type="text" class="r" value="${esc(e.reps||'')}"></label><label>Rest (s)<input type="number" class="t" inputmode="numeric" value="${e.rest||''}" placeholder="${S.settings.defaultRest}"></label></div>
+      <div class="r3"><button class="pill hd${e.hold?' on':''}">Timed hold</button><input type="number" class="hs" inputmode="numeric" value="${e.holdSec||''}" placeholder="target sec — blank counts up"${e.hold?'':' disabled'}></div>`;
+    const pill=w.querySelector('.hd'),hsec=w.querySelector('.hs');
+    pill.onclick=()=>{pill.classList.toggle('on');hsec.disabled=!pill.classList.contains('on');};
     w.querySelector('.up').onclick=()=>{readEd();if(i>0){[ED.exercises[i-1],ED.exercises[i]]=[ED.exercises[i],ED.exercises[i-1]];}renderEdList();};
     w.querySelector('.dn').onclick=()=>{readEd();if(i<ED.exercises.length-1){[ED.exercises[i+1],ED.exercises[i]]=[ED.exercises[i],ED.exercises[i+1]];}renderEdList();};
     w.querySelector('.del').onclick=()=>{readEd();ED.exercises.splice(i,1);renderEdList();};
@@ -599,9 +676,11 @@ function readEd(){
   ED.name=$('#edName').value.trim();ED.note=$('#edNote').value.trim();
   document.querySelectorAll('#edList .exed').forEach(w=>{const e=ED.exercises[+w.dataset.i];if(!e)return;
     e.name=w.querySelector('.n').value.trim();e.sets=clamp(parseInt(w.querySelector('.s').value)||1,1,50);e.reps=w.querySelector('.r').value.trim();
-    const r=parseInt(w.querySelector('.t').value);e.rest=r>0?r:null;});
+    const r=parseInt(w.querySelector('.t').value);e.rest=r>0?r:null;
+    e.hold=w.querySelector('.hd').classList.contains('on');
+    const hs=parseInt(w.querySelector('.hs').value);e.holdSec=e.hold&&hs>0?hs:null;});
 }
-$('#edAdd').onclick=()=>{readEd();ED.exercises.push({id:uid(),name:'',sets:3,reps:'',rest:null});renderEdList();
+$('#edAdd').onclick=()=>{readEd();ED.exercises.push({id:uid(),name:'',sets:3,reps:'',rest:null,hold:false,holdSec:null});renderEdList();
   const last=document.querySelector('#edList .exed:last-child .n');if(last)last.focus();};
 $('#edCopy').onchange=e=>{const k=e.target.value;if(k==='')return;readEd();const src=S.routine[k];if(src){ED.exercises=src.exercises.map(x=>({...x,id:uid()}));if(!ED.name)ED.name=src.name||'';$('#edName').value=ED.name;}e.target.value='';renderEdList();};
 $('#stTap').onclick=e=>e.target.classList.toggle('on');$('#stSound').onclick=e=>e.target.classList.toggle('on');$('#stBridge').onclick=e=>e.target.classList.toggle('on');
@@ -618,12 +697,13 @@ $('#edExport').onclick=()=>{const w=$('#edJsonWrap');w.classList.toggle('hidden'
 $('#edCopyJson').onclick=async()=>{try{await navigator.clipboard.writeText($('#edJson').value);banner('Copied');}catch(e){$('#edJson').select();}};
 $('#edImport').onclick=()=>{try{const j=JSON.parse($('#edJson').value);if(!j.routine)throw 0;
   for(const k of Object.keys(j.routine)){const d=j.routine[k];if(!Array.isArray(d.exercises))throw 0;d.exercises.forEach(e=>{if(!e.id)e.id=uid();e.sets=clamp(parseInt(e.sets)||1,1,50);});}
-  S.routine=j.routine;if(j.settings)Object.assign(S.settings,j.settings);save();$('#sheet').classList.add('hidden');ED=null;renderAll();banner('Routine imported');}
+  S.routine=j.routine;if(j.settings)Object.assign(S.settings,j.settings);migrateHolds();save();$('#sheet').classList.add('hidden');ED=null;renderAll();banner('Routine imported');}
   catch(e){banner('That JSON doesn\'t look right');}};
 $('#edClearSession').onclick=()=>{if(confirm('Clear all set counts for today?')){S.session=newSession(S.session.day);save();$('#sheet').classList.add('hidden');ED=null;renderAll();}};
 $('#editBtn').onclick=openEdit;
 
 /* ---------- boot ---------- */
+migrateHolds();
 ensureSession();
 if(T.status==='running'&&T.endAt<=Date.now())T.status='done';
 if(T.status==='done'){document.body.classList.add('alarm');}
