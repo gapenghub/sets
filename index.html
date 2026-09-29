@@ -105,7 +105,9 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .seg{display:flex;background:var(--card2);border-radius:9px;padding:2px;margin:6px 0 2px;flex:none}
 .seg button{flex:1;padding:7px 0;border-radius:7px;font-size:13px;font-weight:600;color:var(--text)}
 .seg button.on{background:#636366}
-.swwrap{flex:none;display:flex;align-items:center;justify-content:center;padding:34px 0 22px}
+.swwrap{flex:none;display:flex;align-items:center;justify-content:center;padding:30px 0 14px}
+.swtime.past{color:var(--green)}
+.swcap{flex:none;text-align:center;color:var(--muted);font-size:13px;margin-bottom:8px}
 .swtime{font-size:min(17vw,72px);font-weight:200;font-variant-numeric:tabular-nums;letter-spacing:-1px;line-height:1}
 .laps{flex:1;min-height:0;overflow-y:auto;background:var(--card);border-radius:14px}
 .lap{display:flex;justify-content:space-between;padding:11px 14px;border-bottom:.5px solid var(--sep);font-size:16px;font-variant-numeric:tabular-nums}
@@ -258,6 +260,8 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
     </div>
     <div id="clockSw" class="hidden">
       <div class="swwrap"><div class="swtime" id="swTime">00:00.00</div></div>
+      <div class="swcap">Chime at</div>
+      <div class="presets" id="swTargets"></div>
       <div class="laps hidden" id="swLaps"></div>
       <div class="tbtns">
         <button class="rbtn" id="swLeft" disabled>Lap</button>
@@ -296,6 +300,7 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
     <div class="frow"><label>Sound at zero</label><button class="sw" id="stSound"></button></div>
     <div class="frow"><label>Hold target chime</label><button id="stTestCue" style="color:var(--orange)">Play</button></div>
     <div class="frow"><label>Timer presets (sec)</label><input type="text" id="stPresets" placeholder="60, 90, 120, 180"></div>
+    <div class="frow"><label>Stopwatch targets (sec)</label><input type="text" id="stSwT" placeholder="20, 30, 45, 60"></div>
   </div>
   <h2>Shortcuts bridge</h2>
   <div class="card">
@@ -351,11 +356,11 @@ function seedRoutine(){
 function newSession(day){return {date:todayKey(),day,counts:{},activeId:null,history:[],holds:{},hold:null,sides:{},last:Date.now()};}
 function defaultState(){
   return {
-    settings:{defaultRest:180,tapStartsTimer:true,sound:true,bridge:false,bridgeStart:'Rest',bridgeCancel:'Rest Cancel',presets:[60,90,120,180]},
+    settings:{defaultRest:180,tapStartsTimer:true,sound:true,bridge:false,bridgeStart:'Rest',bridgeCancel:'Rest Cancel',presets:[60,90,120,180],swTargets:[20,30,45,60]},
     routine:seedRoutine(),
     session:newSession(new Date().getDay()),
     timer:{status:'idle',duration:180,endAt:0,remaining:0,pick:180,label:''},
-    sw:{running:false,startAt:0,acc:0,laps:[]},
+    sw:{running:false,startAt:0,acc:0,laps:[],target:0,cued:false},
     ui:{tab:'sets',clock:'timer',a2hsDismissed:false},
   };
 }
@@ -485,15 +490,19 @@ function tFinish(){T.status='done';syncTimerSide();startAlarm();document.body.cl
 function syncTimerSide(){wake(T.status==='running'||!!S.session.hold||SW.running);syncTick();}
 function tRemaining(){return T.status==='running'?Math.max(0,T.endAt-Date.now()):T.status==='paused'?T.remaining:0;}
 // The ticker only exists while something is actually counting — idle costs nothing.
+const swArmed=()=>SW.running&&SW.target>0&&!SW.cued;
 let tickId=null;
 function tick(){
   if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
   if(S.session.hold)renderHoldLive();
+  // Checked here rather than in the paint loop so the chime still fires from another tab.
+  if(swArmed()&&swElapsed()>=SW.target*1000){SW.cued=true;playCue();save();
+    if(S.ui.tab==='timer'&&S.ui.clock==='sw')$('#swTime').classList.add('past');}
   if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();
   syncTick();
 }
 function syncTick(){
-  const need=!document.hidden&&(T.status==='running'||!!(S.session&&S.session.hold)||alarmWanted);
+  const need=!document.hidden&&(T.status==='running'||!!(S.session&&S.session.hold)||alarmWanted||swArmed());
   if(need&&tickId===null)tickId=setInterval(tick,250);
   else if(!need&&tickId!==null){clearInterval(tickId);tickId=null;}
 }
@@ -503,9 +512,10 @@ const SW=S.sw;
 const swElapsed=()=>SW.acc+(SW.running?Date.now()-SW.startAt:0);
 function fmtSw(ms){ms=Math.max(0,ms);const cs=Math.floor(ms/10)%100,s=Math.floor(ms/1000)%60,m=Math.floor(ms/60000);
   return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;}
-function swStart(){SW.startAt=Date.now();SW.running=true;syncTimerSide();save();renderTimer();}
+const swPast=()=>!!SW.target&&swElapsed()>=SW.target*1000;
+function swStart(){SW.startAt=Date.now();SW.running=true;if(!SW.acc)SW.cued=false;syncTimerSide();save();renderTimer();}
 function swStop(){SW.acc=swElapsed();SW.running=false;syncTimerSide();save();renderTimer();}
-function swReset(){SW.acc=0;SW.running=false;SW.laps=[];syncTimerSide();save();renderTimer();}
+function swReset(){SW.acc=0;SW.running=false;SW.laps=[];SW.cued=false;syncTimerSide();save();renderTimer();}
 function swLap(){const e=swElapsed(),used=SW.laps.reduce((a,b)=>a+b,0);SW.laps.push(e-used);if(SW.laps.length>99)SW.laps.shift();save();renderLaps();}
 // Own rAF loop rather than the 250ms ticker: hundredths need ~30ms, but only while actually on screen.
 let swRaf=null,swPaint=0;
@@ -513,12 +523,22 @@ const swVisible=()=>SW.running&&!document.hidden&&S.ui.tab==='timer'&&S.ui.clock
 function swLoop(){
   if(!swVisible()){swRaf=null;return;}
   const now=performance.now();
-  if(now-swPaint>=30){swPaint=now;$('#swTime').textContent=fmtSw(swElapsed());}
+  if(now-swPaint>=30){swPaint=now;const el=$('#swTime');el.textContent=fmtSw(swElapsed());el.classList.toggle('past',swPast());}
   swRaf=requestAnimationFrame(swLoop);
 }
 function swSync(){if(swVisible()){if(swRaf===null)swRaf=requestAnimationFrame(swLoop);}else if(swRaf!==null){cancelAnimationFrame(swRaf);swRaf=null;}}
+function renderSwTargets(){
+  const p=$('#swTargets');p.innerHTML='';
+  const mk=(label,val)=>{const b=document.createElement('button');b.textContent=label;
+    if((SW.target||0)===val)b.classList.add('on');
+    // Arming a target you are already past shouldn't chime instantly — treat it as already done.
+    b.onclick=()=>{SW.target=val;SW.cued=val>0&&swElapsed()>=val*1000;save();renderTimer();};
+    p.appendChild(b);};
+  mk('Off',0);S.settings.swTargets.forEach(s=>mk(fmt(s),s));
+}
 function renderSw(){
-  $('#swTime').textContent=fmtSw(swElapsed());
+  const t=$('#swTime');t.textContent=fmtSw(swElapsed());t.classList.toggle('past',swPast());
+  renderSwTargets();
   const l=$('#swLeft'),r=$('#swRight');
   l.textContent=SW.running?'Lap':'Reset';l.disabled=!SW.running&&!SW.acc&&!SW.laps.length;
   r.textContent=SW.running?'Stop':'Start';r.className='rbtn '+(SW.running?'red':'green');
@@ -805,7 +825,7 @@ function openEdit(){
   const cp=$('#edCopy');cp.innerHTML='<option value="">—</option>'+[1,2,3,4,5,6,0].filter(k=>k!==d).map(k=>`<option value="${k}">${DAYS[k]}${S.routine[k]&&S.routine[k].name?' · '+esc(S.routine[k].name):''}</option>`).join('');
   cp.value='';
   const st=S.settings;$('#stRest').value=st.defaultRest;$('#stTap').classList.toggle('on',st.tapStartsTimer);$('#stSound').classList.toggle('on',st.sound);
-  $('#stBridge').classList.toggle('on',st.bridge);$('#stBStart').value=st.bridgeStart;$('#stBCancel').value=st.bridgeCancel;$('#stPresets').value=st.presets.join(', ');
+  $('#stBridge').classList.toggle('on',st.bridge);$('#stBStart').value=st.bridgeStart;$('#stBCancel').value=st.bridgeCancel;$('#stPresets').value=st.presets.join(', ');$('#stSwT').value=st.swTargets.join(', ');
   $('#edJsonWrap').classList.add('hidden');
   renderEdList();$('#sheet').classList.remove('hidden');$('#sheet').scrollTop=0;
 }
@@ -845,6 +865,7 @@ $('#edDone').onclick=()=>{
   const st=S.settings;st.defaultRest=clamp(parseInt($('#stRest').value)||180,5,3600);st.tapStartsTimer=$('#stTap').classList.contains('on');st.sound=$('#stSound').classList.contains('on');
   st.bridge=$('#stBridge').classList.contains('on');st.bridgeStart=$('#stBStart').value.trim()||'Rest';st.bridgeCancel=$('#stBCancel').value.trim()||'Rest Cancel';
   const pr=$('#stPresets').value.split(/[,\s]+/).map(x=>parseInt(x)).filter(x=>x>0&&x<=5999);if(pr.length)st.presets=[...new Set(pr)].slice(0,6);
+  const sp=$('#stSwT').value.split(/[,\s]+/).map(x=>parseInt(x)).filter(x=>x>0&&x<=5999);st.swTargets=[...new Set(sp)].slice(0,5);
   $('#sheet').classList.add('hidden');ED=null;save();renderAll();
 };
 $('#edExport').onclick=()=>{const w=$('#edJsonWrap');w.classList.toggle('hidden');if(!w.classList.contains('hidden'))$('#edJson').value=JSON.stringify({routine:S.routine,settings:S.settings},null,1);};
