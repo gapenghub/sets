@@ -100,7 +100,20 @@ h1{font-size:34px;font-weight:700;margin:6px 0 0;letter-spacing:-.4px}
 .ctrls .c .fill{position:absolute;inset:0;background:var(--red);transform:scaleX(0);transform-origin:left;opacity:.35}
 .ctrls .holding .c .fill{transform:scaleX(1);transition:transform 1s linear}
 
-/* timer */
+/* clock: timer + stopwatch */
+#clockTimer,#clockSw{display:flex;flex-direction:column;flex:1;min-height:0}
+.seg{display:flex;background:var(--card2);border-radius:9px;padding:2px;margin:6px 0 2px;flex:none}
+.seg button{flex:1;padding:7px 0;border-radius:7px;font-size:13px;font-weight:600;color:var(--text)}
+.seg button.on{background:#636366}
+.swwrap{flex:none;display:flex;align-items:center;justify-content:center;padding:34px 0 22px}
+.swtime{font-size:min(17vw,72px);font-weight:200;font-variant-numeric:tabular-nums;letter-spacing:-1px;line-height:1}
+.laps{flex:1;min-height:0;overflow-y:auto;background:var(--card);border-radius:14px}
+.lap{display:flex;justify-content:space-between;padding:11px 14px;border-bottom:.5px solid var(--sep);font-size:16px;font-variant-numeric:tabular-nums}
+.lap:last-child{border-bottom:0}
+.lap .n{color:var(--muted)}
+.lap.best .t{color:var(--green)}
+.lap.worst .t{color:var(--red)}
+.rbtn.red{background:rgba(255,69,58,.22);color:var(--red)}
 .picker{position:relative;height:216px;display:flex;justify-content:center;align-items:center;gap:0;margin:24px 0 10px}
 .picker .col{height:216px;width:80px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;
   }
@@ -219,8 +232,10 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
     </div>
   </section>
 
-  <!-- TIMER -->
+  <!-- CLOCK: timer + stopwatch -->
   <section id="screen-timer" class="screen">
+    <div class="seg" id="clockSeg"><button data-c="timer" class="on">Timer</button><button data-c="sw">Stopwatch</button></div>
+    <div id="clockTimer">
     <div id="tIdle">
       <div class="picker">
         <div class="col" id="pmin"></div><span class="unit">min</span>
@@ -240,13 +255,22 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
       <button class="rbtn" id="tCancel" disabled>Cancel</button>
       <button class="rbtn green" id="tMain">Start</button>
     </div>
+    </div>
+    <div id="clockSw" class="hidden">
+      <div class="swwrap"><div class="swtime" id="swTime">00:00.00</div></div>
+      <div class="laps hidden" id="swLaps"></div>
+      <div class="tbtns">
+        <button class="rbtn" id="swLeft" disabled>Lap</button>
+        <button class="rbtn green" id="swRight">Start</button>
+      </div>
+    </div>
   </section>
 </main>
 
 <nav class="tabbar">
   <button data-tab="today"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>Today</button>
   <button data-tab="sets"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9h3v7M9 16h6"/></svg>Sets</button>
-  <button data-tab="timer"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6M12 2v3"/></svg>Timer</button>
+  <button data-tab="timer"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6M12 2v3"/></svg>Clock</button>
 </nav>
 
 <div id="banner"><div class="txt" id="bannerTxt"></div><button id="bannerUndo">Undo</button></div>
@@ -324,20 +348,21 @@ function seedRoutine(){
     6:{name:'Optional run',note:'45 min light run, conversational pace. One day (Sat or Sun), not both.',exercises:[]},
   };
 }
-function newSession(day){return {date:todayKey(),day,counts:{},activeId:null,history:[],holds:{},hold:null,last:Date.now()};}
+function newSession(day){return {date:todayKey(),day,counts:{},activeId:null,history:[],holds:{},hold:null,sides:{},last:Date.now()};}
 function defaultState(){
   return {
     settings:{defaultRest:180,tapStartsTimer:true,sound:true,bridge:false,bridgeStart:'Rest',bridgeCancel:'Rest Cancel',presets:[60,90,120,180]},
     routine:seedRoutine(),
     session:newSession(new Date().getDay()),
     timer:{status:'idle',duration:180,endAt:0,remaining:0,pick:180,label:''},
-    ui:{tab:'sets',a2hsDismissed:false},
+    sw:{running:false,startAt:0,acc:0,laps:[]},
+    ui:{tab:'sets',clock:'timer',a2hsDismissed:false},
   };
 }
 let S=load();
 function load(){
   try{const raw=localStorage.getItem(KEY);if(raw){const s=JSON.parse(raw);const d=defaultState();
-    s.settings=Object.assign(d.settings,s.settings||{});s.timer=Object.assign(d.timer,s.timer||{});s.ui=Object.assign(d.ui,s.ui||{});
+    s.settings=Object.assign(d.settings,s.settings||{});s.timer=Object.assign(d.timer,s.timer||{});s.ui=Object.assign(d.ui,s.ui||{});s.sw=Object.assign(d.sw,s.sw||{});
     s.session=s.session||d.session;s.routine=s.routine||d.routine;return s;}}catch(e){}
   return defaultState();
 }
@@ -355,11 +380,15 @@ function migrateHolds(){
   Object.keys(S.routine).forEach(k=>{
     const d=S.routine[k];if(!d||!Array.isArray(d.exercises))return;
     d.exercises.forEach(e=>{
-      if(e.hold!==undefined)return;changed=true;
       const text=((e.name||'')+' '+(e.reps||'')).toLowerCase();
-      const secs=/^(\d+)\s*(?:[–-]\s*\d+\s*)?s\b/.exec((e.reps||'').trim());
-      const isHold=/\bhold\b|plank|l-?sit|dead\s*hang/.test(text)||!!secs;
-      e.hold=isHold;e.holdSec=isHold&&secs?parseInt(secs[1]):null;
+      if(e.hold===undefined){changed=true;
+        const secs=/^(\d+)\s*(?:[–-]\s*\d+\s*)?s\b/.exec((e.reps||'').trim());
+        const isHold=/\bhold\b|plank|l-?sit|dead\s*hang/.test(text)||!!secs;
+        e.hold=isHold;e.holdSec=isHold&&secs?parseInt(secs[1]):null;}
+      // Per-side only matters for holds so far, so only holds get auto-classified — turning it on for
+      // a rep exercise would silently double its taps.
+      if(e.side===undefined){changed=true;
+        e.side=!!e.hold&&(/\bea\b|each\s*side/.test(text)||/\bflag\b|side\s*plank|suitcase|one[-\s]?arm|1[-\s]?arm|single[-\s]?leg|1[-\s]?leg/.test(text));}
     });
   });
   if(changed)save();
@@ -367,7 +396,7 @@ function migrateHolds(){
 function ensureSession(){
   const s=S.session;
   if(s.date!==todayKey() && Date.now()-(s.last||0)>4*3600e3){S.session=newSession(new Date().getDay());}
-  if(!s.holds)s.holds={};if(s.hold===undefined)s.hold=null;
+  if(!s.holds)s.holds={};if(!s.sides)s.sides={};if(s.hold===undefined)s.hold=null;
   const day=S.routine[S.session.day];
   const exs=day?day.exercises:[];
   if(!exs.find(e=>e.id===S.session.activeId)){const n=exs.find(e=>count(e.id)<e.sets)||exs[0];S.session.activeId=n?n.id:null;}
@@ -453,7 +482,7 @@ function tPause(){if(T.status!=='running')return;T.remaining=T.endAt-Date.now();
 function tResume(){if(T.status!=='paused')return;T.endAt=Date.now()+T.remaining;T.status='running';syncTimerSide();save();renderTimer();}
 function tCancel(){stopAlarmSound();document.body.classList.remove('alarm');T.status='idle';syncTimerSide();save();renderTimer();}
 function tFinish(){T.status='done';syncTimerSide();startAlarm();document.body.classList.add('alarm');save();renderTimer();}
-function syncTimerSide(){wake(T.status==='running'||!!S.session.hold);syncTick();}
+function syncTimerSide(){wake(T.status==='running'||!!S.session.hold||SW.running);syncTick();}
 function tRemaining(){return T.status==='running'?Math.max(0,T.endAt-Date.now()):T.status==='paused'?T.remaining:0;}
 // The ticker only exists while something is actually counting — idle costs nothing.
 let tickId=null;
@@ -468,6 +497,44 @@ function syncTick(){
   if(need&&tickId===null)tickId=setInterval(tick,250);
   else if(!need&&tickId!==null){clearInterval(tickId);tickId=null;}
 }
+
+/* ---------- stopwatch ---------- */
+const SW=S.sw;
+const swElapsed=()=>SW.acc+(SW.running?Date.now()-SW.startAt:0);
+function fmtSw(ms){ms=Math.max(0,ms);const cs=Math.floor(ms/10)%100,s=Math.floor(ms/1000)%60,m=Math.floor(ms/60000);
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;}
+function swStart(){SW.startAt=Date.now();SW.running=true;syncTimerSide();save();renderTimer();}
+function swStop(){SW.acc=swElapsed();SW.running=false;syncTimerSide();save();renderTimer();}
+function swReset(){SW.acc=0;SW.running=false;SW.laps=[];syncTimerSide();save();renderTimer();}
+function swLap(){const e=swElapsed(),used=SW.laps.reduce((a,b)=>a+b,0);SW.laps.push(e-used);if(SW.laps.length>99)SW.laps.shift();save();renderLaps();}
+// Own rAF loop rather than the 250ms ticker: hundredths need ~30ms, but only while actually on screen.
+let swRaf=null,swPaint=0;
+const swVisible=()=>SW.running&&!document.hidden&&S.ui.tab==='timer'&&S.ui.clock==='sw';
+function swLoop(){
+  if(!swVisible()){swRaf=null;return;}
+  const now=performance.now();
+  if(now-swPaint>=30){swPaint=now;$('#swTime').textContent=fmtSw(swElapsed());}
+  swRaf=requestAnimationFrame(swLoop);
+}
+function swSync(){if(swVisible()){if(swRaf===null)swRaf=requestAnimationFrame(swLoop);}else if(swRaf!==null){cancelAnimationFrame(swRaf);swRaf=null;}}
+function renderSw(){
+  $('#swTime').textContent=fmtSw(swElapsed());
+  const l=$('#swLeft'),r=$('#swRight');
+  l.textContent=SW.running?'Lap':'Reset';l.disabled=!SW.running&&!SW.acc&&!SW.laps.length;
+  r.textContent=SW.running?'Stop':'Start';r.className='rbtn '+(SW.running?'red':'green');
+  renderLaps();swSync();
+}
+function renderLaps(){
+  const box=$('#swLaps'),n=SW.laps.length;
+  box.classList.toggle('hidden',!n);if(!n){box.innerHTML='';return;}
+  const best=Math.min(...SW.laps),worst=Math.max(...SW.laps);
+  box.innerHTML=SW.laps.map((d,i)=>
+    `<div class="lap${n>1&&d===best?' best':''}${n>1&&d===worst?' worst':''}"><span class="n">Lap ${i+1}</span><span class="t">${fmtSw(d)}</span></div>`
+  ).reverse().join('');
+}
+$('#swLeft').onclick=()=>{SW.running?swLap():swReset();};
+$('#swRight').onclick=()=>{SW.running?swStop():swStart();};
+document.querySelectorAll('#clockSeg button').forEach(b=>b.onclick=()=>{S.ui.clock=b.dataset.c;lastSec=-1;save();renderTimer();});
 
 /* ---------- shortcuts bridge ---------- */
 function bridge(name,input){
@@ -489,20 +556,36 @@ function tap(){
     if(S.session.hold)return finishHold();
     return startHold(id);
   }
-  countSet(ex,id,now,null);
+  // A per-side rep exercise takes two taps: one when the first side is done, one to close the set.
+  if(ex&&ex.side&&sideOf(id)===0)return advanceSide(id,null,null);
+  countSet(ex,id,now,null,null);
 }
+const sideOf=id=>S.session.sides[id]||0;
+const holdKey=(ex,id,side)=>(ex&&ex.side)?id+(side?'#R':'#L'):id;
 function startHold(id){
   S.session.hold={id,start:Date.now(),cued:false};lastHoldSec=-1;syncTimerSide();save();renderSets();
 }
 function cancelHold(){if(!S.session.hold)return;S.session.hold=null;syncTimerSide();save();renderSets();}
 function finishHold(){
-  const h=S.session.hold;const secs=Math.round((Date.now()-h.start)/1000);
+  const h=S.session.hold;const ex=activeEx();const id=h.id;
+  const secs=Math.round((Date.now()-h.start)/1000);
+  const key=holdKey(ex,id,sideOf(id));
   S.session.hold=null;
-  (S.session.holds[h.id]=S.session.holds[h.id]||[]).push(secs);
-  countSet(activeEx(),h.id,Date.now(),secs);
+  (S.session.holds[key]=S.session.holds[key]||[]).push(secs);
+  // First side of a two-sided hold: bank the time and wait for the other side — no set, no rest yet.
+  if(ex&&ex.side&&sideOf(id)===0)return advanceSide(id,key,secs);
+  countSet(ex,id,Date.now(),secs,key);
 }
-function countSet(ex,id,now,heldSecs){
-  const entry={type:'tap',id,prevActive:S.session.activeId,prevTimer:tSnapshot(),bridged:false,at:now,held:heldSecs};
+function advanceSide(id,heldKey,held){
+  pushHistory({type:'halfside',id,prevSide:sideOf(id),heldKey,held});
+  S.session.sides[id]=1;S.session.last=Date.now();
+  bump();syncTimerSide();save();renderSets();
+}
+function pushHistory(e){S.session.history.push(e);if(S.session.history.length>60)S.session.history.shift();}
+function bump(){const tz=$('#tapzone');tz.classList.add('bump');setTimeout(()=>tz.classList.remove('bump'),130);}
+function countSet(ex,id,now,heldSecs,heldKey){
+  const entry={type:'tap',id,prevActive:S.session.activeId,prevTimer:tSnapshot(),bridged:false,at:now,held:heldSecs,heldKey,prevSide:sideOf(id)};
+  if(ex&&ex.side)S.session.sides[id]=0;
   S.session.counts[id]=count(id)+1;S.session.last=now;
   if(S.settings.tapStartsTimer){tStart(restFor(ex),ex?ex.name:'');if(S.settings.bridge){entry.bridged=true;}}
   else if(T.status==='done'){T.status='idle';renderTimer();}
@@ -511,8 +594,7 @@ function countSet(ex,id,now,heldSecs){
     if(nx){S.session.activeId=nx.id;banner(`${ex.name} done → ${nx.name}`,true);}
     else banner(`${ex.name} done — workout complete!`,true);
   }
-  S.session.history.push(entry);if(S.session.history.length>60)S.session.history.shift();
-  const tz=$('#tapzone');tz.classList.add('bump');setTimeout(()=>tz.classList.remove('bump'),130);
+  pushHistory(entry);bump();
   save();renderAll();
   if(entry.bridged)setTimeout(()=>bridge(S.settings.bridgeStart,restFor(ex)),60);
 }
@@ -520,17 +602,26 @@ function undo(){
   if(S.session.hold)return cancelHold();  // a hold in progress: first Undo just throws it away
   const e=S.session.history.pop();if(!e)return;
   hideBanner();
+  const dropHold=en=>{const k=en.heldKey||en.id;if(en.held!=null&&S.session.holds[k])S.session.holds[k].pop();};
   if(e.type==='tap'){
     S.session.counts[e.id]=Math.max(0,count(e.id)-1);S.session.activeId=e.prevActive;
-    if(e.held!=null&&S.session.holds[e.id])S.session.holds[e.id].pop();
+    if(e.prevSide!==undefined)S.session.sides[e.id]=e.prevSide;
+    dropHold(e);
     if(Date.now()-e.at<30000){tRestore(e.prevTimer);stopAlarmSound();document.body.classList.remove('alarm');if(e.bridged)setTimeout(()=>bridge(S.settings.bridgeCancel,null),60);}
-  }else if(e.type==='reset'){S.session.counts[e.id]=e.prev;if(e.prevHolds&&e.prevHolds.length)S.session.holds[e.id]=e.prevHolds;}
+  }else if(e.type==='halfside'){          // step back to the first side of the set
+    S.session.sides[e.id]=e.prevSide;dropHold(e);
+  }else if(e.type==='reset'){S.session.counts[e.id]=e.prev;
+    if(Array.isArray(e.prevHolds)){if(e.prevHolds.length)S.session.holds[e.id]=e.prevHolds;}
+    else if(e.prevHolds)Object.keys(e.prevHolds).forEach(k=>{S.session.holds[k]=e.prevHolds[k];});
+    if(e.prevSide!==undefined)S.session.sides[e.id]=e.prevSide;}
   else if(e.type==='next'){S.session.activeId=e.prevActive;}
   S.session.last=Date.now();save();renderAll();
 }
-function resetCount(){const ex=activeEx();const id=ex?ex.id:'_free';if(!count(id))return;
-  S.session.history.push({type:'reset',id,prev:count(id),prevHolds:(S.session.holds[id]||[]).slice()});
-  S.session.counts[id]=0;delete S.session.holds[id];save();renderAll();}
+function resetCount(){const ex=activeEx();const id=ex?ex.id:'_free';if(!count(id)&&!sideOf(id))return;
+  const keys=[id,id+'#L',id+'#R'],prevHolds={};
+  keys.forEach(k=>{if(S.session.holds[k])prevHolds[k]=S.session.holds[k].slice();});
+  pushHistory({type:'reset',id,prev:count(id),prevHolds,prevSide:sideOf(id)});
+  S.session.counts[id]=0;S.session.sides[id]=0;keys.forEach(k=>delete S.session.holds[k]);save();renderAll();}
 function nextExercise(){const exs=dayExs();if(!exs.length)return;const ex=activeEx();const i=ex?exs.indexOf(ex):-1;const nx=exs[(i+1)%exs.length];
   S.session.history.push({type:'next',prevActive:S.session.activeId});S.session.activeId=nx.id;save();renderAll();}
 
@@ -581,20 +672,30 @@ function renderSets(){
   $('#sName').textContent=ex?ex.name:'Free count';
   $('#sMeta').textContent=ex?`${ex.sets} sets × ${ex.reps||'—'} · ${fmt(restFor(ex))} rest`:`No routine selected · ${fmt(S.settings.defaultRest)} rest`;
   const dots=$('#sDots');dots.innerHTML='';if(ex)for(let i=0;i<ex.sets;i++){const d=document.createElement('i');if(i<c)d.classList.add('f');dots.appendChild(d);}
+  const perSide=!!(ex&&ex.side),side=perSide?(sideOf(id)?'right':'left'):'';
   const num=$('#sNum');num.classList.toggle('t',holding);
   if(holding){
     const s=holdSecs();lastHoldSec=s;
     num.textContent=fmt(s);num.classList.toggle('past',!!ex.holdSec&&s>=ex.holdSec);
-    $('#sOf').textContent=ex.holdSec?`hold ${fmt(ex.holdSec)}`:'holding';
-    $('#sTip').textContent='Tap to end the hold and count the set';
+    $('#sOf').textContent=(ex.holdSec?`hold ${fmt(ex.holdSec)}`:'holding')+(perSide?` · ${side}`:'');
+    $('#sTip').textContent=perSide&&sideOf(id)===0?'Tap to end this side':'Tap to end the hold and count the set';
   }else{
     num.textContent=c;num.classList.remove('past');
-    $('#sOf').textContent=ex?`of ${ex.sets}`:'sets';
-    $('#sTip').textContent=ex&&ex.hold?'Tap to start the hold':(S.settings.tapStartsTimer?'Tap anywhere: +1 set, start rest':'Tap anywhere to count a set');
+    $('#sOf').textContent=(ex?`of ${ex.sets}`:'sets')+(perSide?` · ${side}`:'');
+    $('#sTip').textContent=ex&&ex.hold?`Tap to start the ${perSide?side+' ':''}hold`
+      :perSide?`Tap when the ${side} side is done`
+      :(S.settings.tapStartsTimer?'Tap anywhere: +1 set, start rest':'Tap anywhere to count a set');
   }
-  const hs=(S.session.holds||{})[id]||[];
-  $('#sHold').textContent=hs.length&&!holding?`last ${fmt(hs[hs.length-1])} · best ${fmt(Math.max(...hs))}`:'';
-  $('#undoBtn').disabled=!holding&&!S.session.history.length;$('#resetBtn').disabled=!c;$('#nextBtn').disabled=dayExs().length<2;
+  const H=S.session.holds||{};
+  if(perSide&&ex.hold){
+    const L=H[id+'#L']||[],R=H[id+'#R']||[];
+    const one=a=>a.length?fmt(a[a.length-1]):'—';
+    $('#sHold').textContent=(L.length||R.length)?`last  L ${one(L)}  ·  R ${one(R)}`:'';
+  }else{
+    const hs=H[id]||[];
+    $('#sHold').textContent=hs.length?`last ${fmt(hs[hs.length-1])} · best ${fmt(Math.max(...hs))}`:'';
+  }
+  $('#undoBtn').disabled=!holding&&!S.session.history.length;$('#resetBtn').disabled=!c&&!sideOf(id);$('#nextBtn').disabled=dayExs().length<2;
   renderMini(true);
 }
 // Ring/bar step once per second with no transition: between ticks the page is fully static, which keeps
@@ -615,7 +716,7 @@ function renderTimerLive(snap){
   if(document.hidden)return;
   const rem=tRemaining();const secs=Math.ceil(rem/1000);
   if(!snap&&secs===lastSec)return;lastSec=secs;
-  if(S.ui.tab==='timer'){
+  if(S.ui.tab==='timer'&&S.ui.clock!=='sw'){
     const d=$('#tDigits');d.textContent=fmt(secs);d.classList.toggle('h',secs>=3600);
     const p=$('#prog'),off=CIRC*(T.status==='done'?1:leadFrac(rem));
     if(snap){p.style.transition='none';p.style.strokeDashoffset=off;void p.getBoundingClientRect();p.style.transition='';}else p.style.strokeDashoffset=off;
@@ -624,8 +725,13 @@ function renderTimerLive(snap){
 }
 function renderTimer(){
   const idle=T.status==='idle';
-  // Off the Timer tab there is still the rest bar on the Sets tab to keep current.
-  if(S.ui.tab!=='timer'){if(!idle)renderTimerLive(true);else renderMini(true);return;}
+  // Off the Clock tab there is still the rest bar on the Sets tab to keep current.
+  if(S.ui.tab!=='timer'){if(!idle)renderTimerLive(true);else renderMini(true);swSync();return;}
+  const sw=S.ui.clock==='sw';
+  $('#clockTimer').classList.toggle('hidden',sw);$('#clockSw').classList.toggle('hidden',!sw);
+  document.querySelectorAll('#clockSeg button').forEach(b=>b.classList.toggle('on',(b.dataset.c==='sw')===sw));
+  if(sw)return renderSw();
+  swSync();
   $('#tIdle').classList.toggle('hidden',!idle);$('#tRun').classList.toggle('hidden',idle);
   const main=$('#tMain'),cancel=$('#tCancel');cancel.disabled=idle;
   $('#ring').classList.toggle('done',T.status==='done');$('#ring').classList.toggle('paused',T.status==='paused');
@@ -686,8 +792,8 @@ $('#a2hsDismiss').onclick=()=>{S.ui.a2hsDismissed=true;save();renderToday();};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){ensureSession();
   if(T.status==='running'&&T.endAt<=Date.now())tFinish();
   else if(alarmWanted&&Date.now()<alarmUntil)playAlarmNow(); // alarm went off while we were in the background
-  syncTimerSide();renderAll();}
-  else{flush();syncTick();}});   // going away: persist now, and let the ticker stop
+  syncTimerSide();renderAll();swSync();}
+  else{flush();syncTick();swSync();}});   // going away: persist now, and let the loops stop
 window.addEventListener('pagehide',flush);
 
 /* ---------- edit sheet ---------- */
@@ -708,9 +814,11 @@ function renderEdList(){
   ED.exercises.forEach((e,i)=>{const w=document.createElement('div');w.className='exed';w.dataset.i=i;
     w.innerHTML=`<div class="r1"><input type="text" class="n" placeholder="Exercise" value="${esc(e.name)}"><button class="mv up">↑</button><button class="mv dn">↓</button><button class="mv del">✕</button></div>
       <div class="r2"><label>Sets<input type="number" class="s" inputmode="numeric" value="${e.sets}"></label><label>Reps<input type="text" class="r" value="${esc(e.reps||'')}"></label><label>Rest (s)<input type="number" class="t" inputmode="numeric" value="${e.rest||''}" placeholder="${S.settings.defaultRest}"></label></div>
-      <div class="r3"><button class="pill hd${e.hold?' on':''}">Timed hold</button><input type="number" class="hs" inputmode="numeric" value="${e.holdSec||''}" placeholder="target sec — blank counts up"${e.hold?'':' disabled'}></div>`;
+      <div class="r3"><button class="pill hd${e.hold?' on':''}">Timed hold</button><button class="pill sd${e.side?' on':''}">Per side</button></div>
+      <div class="r3"><input type="number" class="hs" inputmode="numeric" value="${e.holdSec||''}" placeholder="hold target in seconds — blank counts up"${e.hold?'':' disabled'}></div>`;
     const pill=w.querySelector('.hd'),hsec=w.querySelector('.hs');
     pill.onclick=()=>{pill.classList.toggle('on');hsec.disabled=!pill.classList.contains('on');};
+    const spill=w.querySelector('.sd');spill.onclick=()=>spill.classList.toggle('on');
     w.querySelector('.up').onclick=()=>{readEd();if(i>0){[ED.exercises[i-1],ED.exercises[i]]=[ED.exercises[i],ED.exercises[i-1]];}renderEdList();};
     w.querySelector('.dn').onclick=()=>{readEd();if(i<ED.exercises.length-1){[ED.exercises[i+1],ED.exercises[i]]=[ED.exercises[i],ED.exercises[i+1]];}renderEdList();};
     w.querySelector('.del').onclick=()=>{readEd();ED.exercises.splice(i,1);renderEdList();};
@@ -722,9 +830,10 @@ function readEd(){
     e.name=w.querySelector('.n').value.trim();e.sets=clamp(parseInt(w.querySelector('.s').value)||1,1,50);e.reps=w.querySelector('.r').value.trim();
     const r=parseInt(w.querySelector('.t').value);e.rest=r>0?r:null;
     e.hold=w.querySelector('.hd').classList.contains('on');
-    const hs=parseInt(w.querySelector('.hs').value);e.holdSec=e.hold&&hs>0?hs:null;});
+    const hs=parseInt(w.querySelector('.hs').value);e.holdSec=e.hold&&hs>0?hs:null;
+    e.side=w.querySelector('.sd').classList.contains('on');});
 }
-$('#edAdd').onclick=()=>{readEd();ED.exercises.push({id:uid(),name:'',sets:3,reps:'',rest:null,hold:false,holdSec:null});renderEdList();
+$('#edAdd').onclick=()=>{readEd();ED.exercises.push({id:uid(),name:'',sets:3,reps:'',rest:null,hold:false,holdSec:null,side:false});renderEdList();
   const last=document.querySelector('#edList .exed:last-child .n');if(last)last.focus();};
 $('#edCopy').onchange=e=>{const k=e.target.value;if(k==='')return;readEd();const src=S.routine[k];if(src){ED.exercises=src.exercises.map(x=>({...x,id:uid()}));if(!ED.name)ED.name=src.name||'';$('#edName').value=ED.name;}e.target.value='';renderEdList();};
 $('#stTap').onclick=e=>e.target.classList.toggle('on');$('#stSound').onclick=e=>e.target.classList.toggle('on');$('#stBridge').onclick=e=>e.target.classList.toggle('on');
