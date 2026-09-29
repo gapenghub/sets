@@ -399,8 +399,8 @@ function migrateHolds(){
   if(changed)save();
 }
 function ensureSession(){
-  const s=S.session;
-  if(s.date!==todayKey() && Date.now()-(s.last||0)>4*3600e3){S.session=newSession(new Date().getDay());}
+  if(S.session.date!==todayKey() && Date.now()-(S.session.last||0)>4*3600e3)S.session=newSession(new Date().getDay());
+  const s=S.session;   // must be read after the possible swap, or we patch the session we just dropped
   if(!s.holds)s.holds={};if(!s.sides)s.sides={};if(s.hold===undefined)s.hold=null;
   const day=S.routine[S.session.day];
   const exs=day?day.exercises:[];
@@ -420,45 +420,54 @@ function fmt(sec){sec=Math.max(0,Math.round(sec));const h=Math.floor(sec/3600),m
 function fmtClock(ts){return new Date(ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});}
 
 /* ---------- audio ---------- */
-// Sounds are synthesised into a wav blob at load, so there is nothing to download and nothing to cache.
-function makeWav(dur,sample,loop){
-  const sr=22050,len=Math.round(sr*dur),buf=new Uint8Array(44+len*2);const dv=new DataView(buf.buffer);
+// Sounds are synthesised into wav blobs, so there is nothing to download and nothing to cache.
+// Building them costs ~50ms, so it happens once the app has painted — nothing can play before
+// the first tap anyway (iOS needs a gesture to unlock audio).
+function makeWav(dur,sample,loop,sr){
+  sr=sr||22050;
+  const len=Math.round(sr*dur),buf=new Uint8Array(44+len*2);const dv=new DataView(buf.buffer);
   const w=(o,s)=>{for(let i=0;i<s.length;i++)buf[o+i]=s.charCodeAt(i);};
   w(0,'RIFF');dv.setUint32(4,36+len*2,true);w(8,'WAVE');w(12,'fmt ');dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
   dv.setUint32(24,sr,true);dv.setUint32(28,sr*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,'data');dv.setUint32(40,len*2,true);
   for(let i=0;i<len;i++)dv.setInt16(44+i*2,Math.max(-1,Math.min(1,sample(i/sr)))*32767,true);
   const el=new Audio(URL.createObjectURL(new Blob([buf],{type:'audio/wav'})));el.loop=!!loop;el.preload='auto';return el;
 }
-// Rest's up: an insistent triple beep you can't miss across a gym.
-const alarmEl=makeWav(3*0.22+0.1,t=>{
-  for(let b=0;b<3;b++){const st=b*0.22;
-    if(t>=st&&t<st+0.16){const e=Math.min(1,(t-st)/0.01,(st+0.16-t)/0.03);
-      return Math.sin(2*Math.PI*1000*t)*e*0.6+Math.sin(2*Math.PI*1500*t)*e*0.25;}}
-  return 0;
-},true);
 // Hold target reached: a soft two-note glass chime (B5 → E6), struck rather than buzzed —
 // each note is a fundamental plus two quickly-fading partials under an exponential decay.
 // The figure repeats three times over ~3s so it is still going if you don't catch the first one.
 const CHIME=[];
 for(let r=0;r<3;r++)CHIME.push({f:987.77,at:r},{f:1318.51,at:r+0.16});
-const cueEl=makeWav(3.3,t=>{
-  let a=0;
-  for(const n of CHIME){const d=t-n.at;if(d<0)continue;
-    const env=Math.exp(-d/0.38)*Math.min(1,d/0.005);   // 5ms attack keeps it from clicking
-    a+=env*(Math.sin(2*Math.PI*n.f*d)
-           +0.30*Math.sin(4*Math.PI*n.f*d)*Math.exp(-d/0.12)
-           +0.12*Math.sin(6*Math.PI*n.f*d)*Math.exp(-d/0.07));}
-  return a*0.5;
-},false);
+let alarmEl=null,cueEl=null;
+function buildSounds(){
+  if(alarmEl)return;
+  // Rest's up: an insistent triple beep you can't miss across a gym.
+  alarmEl=makeWav(3*0.22+0.1,t=>{
+    for(let b=0;b<3;b++){const st=b*0.22;
+      if(t>=st&&t<st+0.16){const e=Math.min(1,(t-st)/0.01,(st+0.16-t)/0.03);
+        return Math.sin(2*Math.PI*1000*t)*e*0.6+Math.sin(2*Math.PI*1500*t)*e*0.25;}}
+    return 0;
+  },true);
+  // 16kHz is ample for a chime topping out at ~4kHz, and notes past 1.6s have decayed to -43dB,
+  // so skipping them cuts the synthesis work without changing what you hear.
+  cueEl=makeWav(3.3,t=>{
+    let a=0;
+    for(const n of CHIME){const d=t-n.at;if(d<0||d>1.6)continue;
+      const env=Math.exp(-d/0.38)*Math.min(1,d/0.005);   // 5ms attack keeps it from clicking
+      a+=env*(Math.sin(2*Math.PI*n.f*d)
+             +0.30*Math.sin(4*Math.PI*n.f*d)*Math.exp(-d/0.12)
+             +0.12*Math.sin(6*Math.PI*n.f*d)*Math.exp(-d/0.07));}
+    return a*0.5;
+  },false,16000);
+}
 let audioUnlocked=false,alarmWanted=false,alarmUntil=0;
 // 'ambient' = mixes with other apps' audio (Netflix keeps playing) and obeys the ringer switch. WebKit-only API.
 function audioMode(){try{if(navigator.audioSession)navigator.audioSession.type='ambient';}catch(e){}}
 function unlockAudio(){
-  if(audioUnlocked)return;audioUnlocked=true;audioMode();
+  if(audioUnlocked)return;audioUnlocked=true;buildSounds();audioMode();
   [alarmEl,cueEl].forEach(el=>{el.muted=true;el.play().then(()=>{el.pause();el.currentTime=0;el.muted=false;}).catch(()=>{el.muted=false;audioUnlocked=false;});});
 }
-function playCue(force){if(!S.settings.sound&&!force)return;audioMode();cueEl.currentTime=0;cueEl.play().catch(()=>{});}
-function stopCue(){cueEl.pause();cueEl.currentTime=0;}
+function playCue(force){if(!S.settings.sound&&!force)return;buildSounds();audioMode();cueEl.currentTime=0;cueEl.play().catch(()=>{});}
+function stopCue(){if(cueEl){cueEl.pause();cueEl.currentTime=0;}}
 function startAlarm(){
   if(!S.settings.sound||S.settings.bridge)return;
   // Beep for up to 30s after the timer actually ended; a catch-up beep minutes later is just noise.
@@ -468,8 +477,8 @@ function startAlarm(){
   if(document.visibilityState==='visible')playAlarmNow();
   syncTick();
 }
-function playAlarmNow(){audioMode();alarmEl.pause();alarmEl.currentTime=0;alarmEl.play().catch(()=>{});}
-function stopAlarmSound(){alarmWanted=false;alarmEl.pause();alarmEl.currentTime=0;syncTick();}
+function playAlarmNow(){buildSounds();audioMode();alarmEl.pause();alarmEl.currentTime=0;alarmEl.play().catch(()=>{});}
+function stopAlarmSound(){alarmWanted=false;if(alarmEl){alarmEl.pause();alarmEl.currentTime=0;}syncTick();}
 
 /* ---------- wake lock ---------- */
 let wl=null;
@@ -496,8 +505,11 @@ function tick(){
   if(T.status==='running'){if(T.endAt<=Date.now())tFinish();else renderTimerLive(false);}
   if(S.session.hold)renderHoldLive();
   // Checked here rather than in the paint loop so the chime still fires from another tab.
-  if(swArmed()&&swElapsed()>=SW.target*1000){SW.cued=true;playCue();save();
-    if(S.ui.tab==='timer'&&S.ui.clock==='sw')$('#swTime').classList.add('past');}
+  // Cap the catch-up the same way the rest alarm does: crossing the target while the app was
+  // backgrounded should not chime minutes later when it comes back.
+  if(swArmed()&&swElapsed()>=SW.target*1000){SW.cued=true;save();
+    if(swElapsed()<SW.target*1000+30000)playCue();
+    if(S.ui.tab==='timer'&&S.ui.clock==='sw')swTimeEl.classList.add('past');}
   if(alarmWanted&&Date.now()>alarmUntil)stopAlarmSound();
   syncTick();
 }
@@ -516,14 +528,15 @@ const swPast=()=>!!SW.target&&swElapsed()>=SW.target*1000;
 function swStart(){SW.startAt=Date.now();SW.running=true;if(!SW.acc)SW.cued=false;syncTimerSide();save();renderTimer();}
 function swStop(){SW.acc=swElapsed();SW.running=false;syncTimerSide();save();renderTimer();}
 function swReset(){SW.acc=0;SW.running=false;SW.laps=[];SW.cued=false;syncTimerSide();save();renderTimer();}
-function swLap(){const e=swElapsed(),used=SW.laps.reduce((a,b)=>a+b,0);SW.laps.push(e-used);if(SW.laps.length>99)SW.laps.shift();save();renderLaps();}
+function swLap(){if(SW.laps.length>=200)return;   // shifting would renumber every lap
+  const e=swElapsed(),used=SW.laps.reduce((a,b)=>a+b,0);SW.laps.push(e-used);save();renderLaps();}
 // Own rAF loop rather than the 250ms ticker: hundredths need ~30ms, but only while actually on screen.
-let swRaf=null,swPaint=0;
+let swRaf=null,swPaint=0;const swTimeEl=$('#swTime');   // repainted ~33x/s while visible
 const swVisible=()=>SW.running&&!document.hidden&&S.ui.tab==='timer'&&S.ui.clock==='sw';
 function swLoop(){
   if(!swVisible()){swRaf=null;return;}
   const now=performance.now();
-  if(now-swPaint>=30){swPaint=now;const el=$('#swTime');el.textContent=fmtSw(swElapsed());el.classList.toggle('past',swPast());}
+  if(now-swPaint>=30){swPaint=now;swTimeEl.textContent=fmtSw(swElapsed());swTimeEl.classList.toggle('past',swPast());}
   swRaf=requestAnimationFrame(swLoop);
 }
 function swSync(){if(swVisible()){if(swRaf===null)swRaf=requestAnimationFrame(swLoop);}else if(swRaf!==null){cancelAnimationFrame(swRaf);swRaf=null;}}
@@ -537,7 +550,7 @@ function renderSwTargets(){
   mk('Off',0);S.settings.swTargets.forEach(s=>mk(fmt(s),s));
 }
 function renderSw(){
-  const t=$('#swTime');t.textContent=fmtSw(swElapsed());t.classList.toggle('past',swPast());
+  swTimeEl.textContent=fmtSw(swElapsed());swTimeEl.classList.toggle('past',swPast());
   renderSwTargets();
   const l=$('#swLeft'),r=$('#swRight');
   l.textContent=SW.running?'Lap':'Reset';l.disabled=!SW.running&&!SW.acc&&!SW.laps.length;
@@ -643,7 +656,7 @@ function resetCount(){const ex=activeEx();const id=ex?ex.id:'_free';if(!count(id
   pushHistory({type:'reset',id,prev:count(id),prevHolds,prevSide:sideOf(id)});
   S.session.counts[id]=0;S.session.sides[id]=0;keys.forEach(k=>delete S.session.holds[k]);save();renderAll();}
 function nextExercise(){const exs=dayExs();if(!exs.length)return;const ex=activeEx();const i=ex?exs.indexOf(ex):-1;const nx=exs[(i+1)%exs.length];
-  S.session.history.push({type:'next',prevActive:S.session.activeId});S.session.activeId=nx.id;save();renderAll();}
+  pushHistory({type:'next',prevActive:S.session.activeId});S.session.activeId=nx.id;save();renderAll();}
 
 /* ---------- banner ---------- */
 let bannerT=null;
@@ -883,6 +896,8 @@ ensureSession();
 if(T.status==='running'&&T.endAt<=Date.now())T.status='done';
 if(T.status==='done'){document.body.classList.add('alarm');}
 renderAll();showTab(S.ui.tab||'sets');syncTimerSide();  // starts the ticker if we reopened mid-rest
+// Synthesise the sounds once the screen is up, not before it.
+if(window.requestIdleCallback)requestIdleCallback(buildSounds,{timeout:1500});else setTimeout(buildSounds,150);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body>
