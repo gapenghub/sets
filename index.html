@@ -299,6 +299,7 @@ textarea{width:100%;min-height:140px;font-family:ui-monospace,Menlo,monospace;fo
     <div class="frow"><label>Tap starts rest timer</label><button class="sw" id="stTap"></button></div>
     <div class="frow"><label>Sound at zero</label><button class="sw" id="stSound"></button></div>
     <div class="frow"><label>Hold target chime</label><button id="stTestCue" style="color:var(--orange)">Play</button></div>
+    <div class="frow"><label>Rest-over alarm</label><button id="stTestAlarm" style="color:var(--orange)">Play</button></div>
     <div class="frow"><label>Timer presets (sec)</label><input type="text" id="stPresets" placeholder="60, 90, 120, 180"></div>
     <div class="frow"><label>Stopwatch targets (sec)</label><input type="text" id="stSwT" placeholder="20, 30, 45, 60"></div>
   </div>
@@ -440,13 +441,15 @@ for(let r=0;r<3;r++)CHIME.push({f:987.77,at:r},{f:1318.51,at:r+0.16});
 let alarmEl=null,cueEl=null;
 function buildSounds(){
   if(alarmEl)return;
-  // Rest's up: an insistent triple beep you can't miss across a gym.
-  alarmEl=makeWav(3*0.22+0.1,t=>{
-    for(let b=0;b<3;b++){const st=b*0.22;
-      if(t>=st&&t<st+0.16){const e=Math.min(1,(t-st)/0.01,(st+0.16-t)/0.03);
+  // Rest's up: three unhurried beeps, then a beat of silence before the loop comes round again.
+  // Same pitch and loudness as before so it still carries across a gym — just not frantic.
+  // 12kHz is plenty for 1.5kHz content and keeps the longer buffer cheap to build.
+  alarmEl=makeWav(2.5,t=>{
+    for(let b=0;b<3;b++){const st=b*0.55;
+      if(t>=st&&t<st+0.28){const e=Math.min(1,(t-st)/0.02,(st+0.28-t)/0.06);
         return Math.sin(2*Math.PI*1000*t)*e*0.6+Math.sin(2*Math.PI*1500*t)*e*0.25;}}
     return 0;
-  },true);
+  },true,12000);
   // 16kHz is ample for a chime topping out at ~4kHz, and notes past 1.6s have decayed to -43dB,
   // so skipping them cuts the synthesis work without changing what you hear.
   cueEl=makeWav(3.3,t=>{
@@ -871,6 +874,9 @@ $('#edAdd').onclick=()=>{readEd();ED.exercises.push({id:uid(),name:'',sets:3,rep
 $('#edCopy').onchange=e=>{const k=e.target.value;if(k==='')return;readEd();const src=S.routine[k];if(src){ED.exercises=src.exercises.map(x=>({...x,id:uid()}));if(!ED.name)ED.name=src.name||'';$('#edName').value=ED.name;}e.target.value='';renderEdList();};
 $('#stTap').onclick=e=>e.target.classList.toggle('on');$('#stSound').onclick=e=>e.target.classList.toggle('on');$('#stBridge').onclick=e=>e.target.classList.toggle('on');
 $('#stTestCue').onclick=()=>{unlockAudio();playCue(true);};
+// One cycle only — the real alarm keeps looping until you dismiss it.
+$('#stTestAlarm').onclick=()=>{unlockAudio();buildSounds();audioMode();
+  alarmEl.currentTime=0;alarmEl.play().catch(()=>{});setTimeout(stopAlarmSound,2600);};
 $('#edCancel').onclick=()=>{$('#sheet').classList.add('hidden');ED=null;};
 $('#edDone').onclick=()=>{
   readEd();ED.exercises=ED.exercises.filter(e=>e.name);
